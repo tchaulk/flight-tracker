@@ -150,15 +150,17 @@ async def plane_has_landed(context: ContextTypes.DEFAULT_TYPE):
         text = "Plane " + flight_data.hex_id + "has landed!"
         if not active_flight_list[flight_data.hex_id][1]:
             print("Removing", context.job.name)
-            if remove_job_if_exists(context.job.name, context):
-                context.job_queue.run_once(
-                    remove_flight_job_callback,
-                    when=timedelta(seconds=1),
-                    name=str(TEST_GROUP_ID),
-                    data=[flight_data.hex_id],
+            remove_job_if_exists(context.job.name, context)
+            context.job_queue.run_once(
+                remove_flight_job_callback,
+                when=timedelta(seconds=1),
+                name=str(TEST_GROUP_ID),
+                data=[flight_data.hex_id],
                 )
         await context.bot.send_message(TEST_GROUP_ID, text)
-
+        # To keep things clean, we want to remove the landing check
+        remove_job_if_exists(str(TEST_GROUP_ID)
+            + "_Landing_" + str(flight_data.hex_id), context)
 
 async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add a flight to list of flights to be checked."""
@@ -199,19 +201,20 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
         print("Adding updated flight_data to id: ", fl_id)
         flight_dict[fl_id] = new_flight
     else:
+        i_text = ""
         key_list = []
         if new_flight.hex_id:
             # We should always have the hex_id to rely on, registration is never guaraunteed
-            text = "Assigning hex_id " + new_flight.hex_id
+            i_text += "Assigning hex_id " + new_flight.hex_id
             key_list.append(new_flight.hex_id)
             print(f"Added {new_flight.hex_id} to flight_dict")
         if new_flight.registration:
-            text += " \n Assigning registration " + new_flight.registration
+            i_text += " \n Assigning registration " + new_flight.registration
             # Add a new mapping if there is no registration, otherwise just add to the key
             key_list.append(new_flight.registration)
 
         flight_dict.add_mapping(new_flight, *key_list)
-        print(text)
+        print(i_text)
         try:
             active_flight_list[fl_id] = [is_reg, repeat]
         except(KeyError, IndexError, ValueError):
@@ -313,8 +316,8 @@ async def remove_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def list_ids(update: Update, _) -> None:
-    """Provide a list of ID's currently being tracked by the program"""
-    text = "Current list of id's being tracked:"
+    """Provide a list of IDs currently being tracked by the program"""
+    text = "Current list of ids being tracked:"
     for key in active_flight_list:
         text += "\n" + key
     await update.message.reply_text(text)

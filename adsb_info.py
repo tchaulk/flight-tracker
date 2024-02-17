@@ -177,11 +177,18 @@ class FlightData:
         if "message" in j_resp:
             print("There's an issue with ID " + plane_id + " ... " + j_resp["message"])
             return False
-        if j_resp["msg"] == "No error" and j_resp["ac"]:
-            # alt_baro will read "Ground" if it's on the ground
-            altitude = j_resp["ac"][0]["alt_baro"]
-            if (altitude == "ground") or (altitude < 20):
-                print("Plane ", self.registration, " has landed, altitude: ", altitude)
+        if j_resp["msg"] == "No error":
+            if j_resp["ac"]:
+                # alt_baro will read "Ground" if it's on the ground, will publish altitute otherwise
+                altitude = j_resp["ac"][0]["alt_baro"]
+                if (altitude == "ground") or (altitude < 20):
+                    print("Plane ", self.registration, " has landed, altitude: ", altitude)
+                    return True
+            # At this point in the logic, we assume that we've gotten usable information in the past 
+            # TODO, Find a better way to check this.
+            elif j_resp["ac"] == None or j_resp["ac"] == "":
+                # Flight has most likely landed and we just missed it landing
+                print("Plane ", self.registration, " has stopped publishing information to ADSB")
                 return True
         return False
 
