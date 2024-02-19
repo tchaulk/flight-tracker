@@ -5,7 +5,7 @@ Pulls and sends flight information through Telegram when selected flights are in
 """
 
 import asyncio
-import logging
+import logging as log
 from datetime import datetime, timedelta
 import os
 from tzlocal import get_localzone
@@ -15,6 +15,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from adsb_info import FlightData
 import multi_key_dict
 
+log.basicConfig(level=log.INFO, format='%(asctime)s - %(name)s - %(funcName)s:%(lineno)d - [%(levelname)s] - %(message)s')
+
+fLog = log.getLogger("flight_bot")
 # ID of where you're sending the telegram message from
 TEST_GROUP_ID = 0
 
@@ -23,17 +26,21 @@ flight_dict = multi_key_dict.MultiKeyDict()
 # List of flights actively being monitored: {id : [idType, isRecurring]}
 active_flight_list = {"a1013f": ["hex", True]}
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-# logging.disable(50)
+def configureLogging(): 
+    fLog.setLevel(log.INFO)
+    formatter = log.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s')
+    handler = log.StreamHandler()
+    handler.setFormatter(formatter)
+    fLog.propagate = False
+    
+    # Add the console handler to the logger
+    fLog.addHandler(handler)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the flight tracker, adds flights from active_flight_list"""
+    # TODO, This shouldn't need to be a global var
     global TEST_GROUP_ID
     TEST_GROUP_ID = update.effective_message.chat_id
-    print("SEND ID = ", TEST_GROUP_ID)
     # Kicks off checker starting with adding all flights that are initially in active_flight_list
     for flight in active_flight_list:
         id_type = active_flight_list[flight][0]
@@ -46,9 +53,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     # Wait for flight list to populate the dictionary before moving forward
     while len(flight_dict) != len(active_flight_list):
-        print("Waiting.... progress: [", len(flight_dict), " / ", len(active_flight_list), "]")
+        fLog.info(f"Waiting for active flight list to populate \
+                 Progress: [{len(flight_dict)} / {len(active_flight_list)}]")
         await asyncio.sleep(1)
-    monitoring_interval = timedelta(minutes=5)
+    monitoring_interval = timedelta(minutes=1)
     context.job_queue.run_repeating(
         callback=check_in_air,
         first=timedelta(seconds=1),
@@ -86,19 +94,23 @@ async def check_in_air(context: ContextTypes.DEFAULT_TYPE):
     and kick of a flight_has_landed check to let the user know when
     the plane has reached it's destination
     """
+    current_flight = None
     # Not user facing so this data should already be valid
     for hex_id in active_flight_list:
         # Find flight, it should already be in system
-        print("Checking ", hex_id, " if it's airborn")
-        current_flight = flight_dict[hex_id]
-        print("Checking ", current_flight.hex_id, " if it's airborn")
+        fLog.info(f"Checking {hex_id} if it's airborn.")
+        if hex_id in flight_dict.key_map.keys():
+            current_flight = flight_dict[hex_id]
+        if current_flight == None:
+            fLog.error(f"Can't find {hex_id} in flight list. Skipping check...")
+            continue
         # If we're already in the air, we don't want to check this...although this might break if
         if current_flight.plane_in_air:
             return
         # Checks if the flight is in the air
         if current_flight.in_the_air():
             plane_emoji = "\U00002708"
-            message = plane_emoji + " Flight " + current_flight.hex_id + " is in air"
+            message = f"{plane_emoji} Flight {current_flight.hex_id} is in air"
             current_flight.plane_in_air = True
             # First time we check if plane has landed
             first_check = datetime.now()
@@ -107,10 +119,9 @@ async def check_in_air(context: ContextTypes.DEFAULT_TYPE):
                 # If we are able to process the AeroData then we can send it in the message
                 if current_flight.process_aero_data():
                     if current_flight.flight_origin:
-                        message += " \n Origin: " + current_flight.flight_origin
+                        message += f" \n Origin: {current_flight.flight_origin}"
                     if current_flight.flight_destination:
-                        message += (
-                            " \n Destination: " + current_flight.flight_destination)
+                        message += f" \n Destination: {current_flight.flight_destination}"
                     # We either start checking immediately or when the flight is supposed to land,
                     # depending if the data was provided
                     if current_flight.landing_time > datetime.now():
@@ -118,15 +129,15 @@ async def check_in_air(context: ContextTypes.DEFAULT_TYPE):
                         # Convert UTC time to local time zone, this conversion is only being done
                         # for readability of the telegram message
                         local_time = local_time.astimezone(get_localzone())
-                        message += "\n Estimated Landing time: " + str(local_time)
+                        message += f"\n Estimated Landing time: {str(local_time)}"
                         # Stop the job that checks if the flight is in the air, we only needed
                         # to do it as long as there was a flight we were waiting on.
                 else:
-                    print("Failed to process all Aero Data for ", current_flight.hex_id)
+                    fLog.warning(f"Failed to process all Aero Data for {current_flight.hex_id}")
             else:
-                print("Failed to get Aero Data for ", current_flight.hex_id)
+                fLog.warning(f"Failed to get Aero Data for {current_flight.hex_id}")
 
-            print("Starting landing check for ", current_flight.hex_id)
+            fLog.info(f"Starting landing check for {current_flight.hex_id}")
             context.job_queue.run_repeating(
                 plane_has_landed,
                 interval=timedelta(seconds=300),
@@ -141,15 +152,23 @@ async def check_in_air(context: ContextTypes.DEFAULT_TYPE):
 
 async def plane_has_landed(context: ContextTypes.DEFAULT_TYPE):
     """Lets the user know when the plane has landed"""
-    print("Checking if flight has landed...")
+    
+    fLog.info(f"Landing Check for: {context.job.data}.")
+    if id in flight_dict.key_map.keys():
+        current_flight = flight_dict[context.job.data]
+    if current_flight == None:
+        fLog.error(f"Can't find {context.job.data} in flight list. Skipping check...")
+        return
+    
     flight_data = flight_dict[context.job.data]
+
     if not flight_data.plane_in_air:
         return
     if flight_data.is_plane_on_ground():
         flight_data.plane_in_air = False
-        text = "Plane " + flight_data.hex_id + "has landed!"
+        text = f"Plane {flight_data.hex_id} has landed!"
         if not active_flight_list[flight_data.hex_id][1]:
-            print("Removing", context.job.name)
+            fLog.info(f"Removing {context.job.name}")
             remove_job_if_exists(context.job.name, context)
             context.job_queue.run_once(
                 remove_flight_job_callback,
@@ -159,15 +178,14 @@ async def plane_has_landed(context: ContextTypes.DEFAULT_TYPE):
                 )
         await context.bot.send_message(TEST_GROUP_ID, text)
         # To keep things clean, we want to remove the landing check
-        remove_job_if_exists(str(TEST_GROUP_ID)
-            + "_Landing_" + str(flight_data.hex_id), context)
+        remove_job_if_exists(f"{str(TEST_GROUP_ID)} _Landing_ {str(flight_data.hex_id)}", context)
 
 async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add a flight to list of flights to be checked."""
     fl_id = ""
     try:
         fl_id = context.job.data[0]
-        # (fixme) Add flight number as an argument, ideally this could be in the form of
+        # (TODO) Add flight number as an argument, ideally this could be in the form of
         # a second prompt asking what we just provided
         is_reg = context.job.data[1] == "reg"
         # Make sure to convert to lower if this is a hex id
@@ -184,42 +202,43 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     new_flight = FlightData(fl_id, is_reg)
     raw_json = new_flight.get_raw_adsb_data()
     if "message" in raw_json:
-        print("There's an issue with ID " + fl_id + " ..." + raw_json["message"])
+        fLog.warning(f"There's an issue with ID {fl_id}: {raw_json["message"]}")
     if raw_json["msg"] == "No error" and raw_json["ac"]:
         if new_flight.process_adsb(raw_json["ac"][0]):
-            print("Processed all fields successfully")
+            fLog.info("Processed all fields successfully")
         else:
-            print("Failed to populate all fields")
+            fLog.warning("Failed to populate all fields")
     else:
-        print("WARNING: Either ", fl_id, "is an invalid ID, or the flight is not airborn yet \
+        fLog.warning(f"Either {fl_id} is an invalid ID, or the flight is not airborn yet \
               so we can't get data")
     # Add flight to multi-key dict, technically if a flight is not in the air we don't
     # add the registration or anything.
     # TODO, should I be updating the dict if a registration doesn't
     # exist when in in_the_air ?
     if fl_id in flight_dict.key_map.keys():
-        print("Adding updated flight_data to id: ", fl_id)
+        fLog.info(f"Adding updated flight_data to id: {fl_id}")
         flight_dict[fl_id] = new_flight
     else:
         i_text = ""
         key_list = []
         if new_flight.hex_id:
-            # We should always have the hex_id to rely on, registration is never guaraunteed
-            i_text += "Assigning hex_id " + new_flight.hex_id
+            # We should always have the hex_id to rely on, registration is never guaranteed
+            i_text += f"Assigning hex_id {new_flight.hex_id}\n"
             key_list.append(new_flight.hex_id)
             print(f"Added {new_flight.hex_id} to flight_dict")
         if new_flight.registration:
-            i_text += " \n Assigning registration " + new_flight.registration
+            i_text += f"Assigning registration {new_flight.registration}"
             # Add a new mapping if there is no registration, otherwise just add to the key
             key_list.append(new_flight.registration)
 
         flight_dict.add_mapping(new_flight, *key_list)
-        print(i_text)
+        fLog.info(i_text)
+        text = f"Flight checker has added ID: {fl_id} to the list!"
         try:
             active_flight_list[fl_id] = [is_reg, repeat]
         except(KeyError, IndexError, ValueError):
-            print("Failed to add to active flight list???")
-    text = "Flight checker has added ID: " + fl_id + " to the list!"
+            text = f"Failed to add {fl_id} to active flight list"
+            fLog.warning(text)
     await context.bot.send_message(TEST_GROUP_ID, text)
 
 
@@ -305,13 +324,13 @@ async def remove_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     if r_id is None:
         text = "Usage: /remove <id>"
     elif r_id in active_flight_list.keys():
-        text = "Removing ID: [" + r_id + "] from list"
+        text = f"Removing ID: [{r_id}] from list"
         try:
             del active_flight_list[r_id]
         except KeyError:
-            text = "Failed to remove ID?"
+            text = f"Failed to remove ID {r_id}"
     else:
-        text = "ID: [" + r_id + "] not found in list"
+        text = f"ID: [{r_id}] not found in list"
     await context.bot.send_message(TEST_GROUP_ID, text)
 
 
@@ -319,7 +338,7 @@ async def list_ids(update: Update, _) -> None:
     """Provide a list of IDs currently being tracked by the program"""
     text = "Current list of ids being tracked:"
     for key in active_flight_list:
-        text += "\n" + key
+        text += f"\n {key}"
     await update.message.reply_text(text)
     return
 
@@ -339,11 +358,17 @@ def main() -> None:
     application.add_handler(CommandHandler("add", add_flight_command))
     application.add_handler(CommandHandler("remove", remove_flight_command))
     application.add_handler(CommandHandler("list", list_ids))
-    print("Ready to start!")
+
+    configureLogging()
+
+    fLog.info("Ready to start!")
 
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
+    # Remove Telegram spamming
+    log.getLogger("httpx").setLevel(log.WARNING)
+
     main()
