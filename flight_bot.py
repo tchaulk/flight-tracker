@@ -20,11 +20,12 @@ log.basicConfig(level=log.INFO, format='%(asctime)s - %(name)s - %(funcName)s:%(
 fLog = log.getLogger("flight_bot")
 # ID of where you're sending the telegram message from
 TEST_GROUP_ID = 0
+has_started = False
 
 # Flight data storage, can access data with both hex and registration
 flight_dict = multi_key_dict.MultiKeyDict()
 # List of flights actively being monitored: {id : [idType, isRecurring]}
-active_flight_list = {"a1013f": ["hex", True]}
+active_flight_list = {"a1013f": ["hex", True], "N621MM": ["reg", True]}
 
 def configureLogging(): 
     fLog.setLevel(log.INFO)
@@ -38,6 +39,10 @@ def configureLogging():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the flight tracker, adds flights from active_flight_list"""
+    global has_started
+    if has_started:
+        return
+    has_started = True
     # TODO, This shouldn't need to be a global var
     global TEST_GROUP_ID
     TEST_GROUP_ID = update.effective_message.chat_id
@@ -56,7 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         fLog.info(f"Waiting for active flight list to populate \
                  Progress: [{len(flight_dict)} / {len(active_flight_list)}]")
         await asyncio.sleep(1)
-    monitoring_interval = timedelta(minutes=1)
+    monitoring_interval = timedelta(minutes=5)
     context.job_queue.run_repeating(
         callback=check_in_air,
         first=timedelta(seconds=1),
@@ -152,16 +157,14 @@ async def check_in_air(context: ContextTypes.DEFAULT_TYPE):
 
 async def plane_has_landed(context: ContextTypes.DEFAULT_TYPE):
     """Lets the user know when the plane has landed"""
-    
+    current_flight = None
     fLog.info(f"Landing Check for: {context.job.data}.")
-    if id in flight_dict.key_map.keys():
+    if context.job.data in flight_dict.key_map.keys():
         current_flight = flight_dict[context.job.data]
     if current_flight == None:
         fLog.error(f"Can't find {context.job.data} in flight list. Skipping check...")
         return
-    
     flight_data = flight_dict[context.job.data]
-
     if not flight_data.plane_in_air:
         return
     if flight_data.is_plane_on_ground():
