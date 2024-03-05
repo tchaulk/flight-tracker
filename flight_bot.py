@@ -59,7 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         fLog.info(f"Waiting for active flight list to populate \
                  Progress: [{len(flight_dict)} / {len(active_flight_list)}]")
         await asyncio.sleep(1)
-    monitoring_interval = timedelta(minutes=1)
+    monitoring_interval = timedelta(minutes=5)
     context.job_queue.run_repeating(
         callback=check_in_air,
         first=timedelta(seconds=1),
