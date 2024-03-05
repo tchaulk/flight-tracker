@@ -15,8 +15,6 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from adsb_info import FlightData
 import multi_key_dict
 
-log.basicConfig(level=log.INFO, format='%(asctime)s - %(name)s - %(funcName)s:%(lineno)d - [%(levelname)s] - %(message)s')
-
 fLog = log.getLogger("flight_bot")
 # ID of where you're sending the telegram message from
 TEST_GROUP_ID = 0
@@ -29,7 +27,7 @@ active_flight_list = {"a1013f": ["hex", True], "N621MM": ["reg", True]}
 
 def configureLogging(): 
     fLog.setLevel(log.INFO)
-    formatter = log.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s')
+    formatter = log.Formatter('%(asctime)s - %(name)s - %(funcName)s:%(lineno)d - [%(levelname)s] - %(message)s')
     handler = log.StreamHandler()
     handler.setFormatter(formatter)
     fLog.propagate = False
@@ -61,7 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         fLog.info(f"Waiting for active flight list to populate \
                  Progress: [{len(flight_dict)} / {len(active_flight_list)}]")
         await asyncio.sleep(1)
-    monitoring_interval = timedelta(minutes=5)
+    monitoring_interval = timedelta(minutes=1)
     context.job_queue.run_repeating(
         callback=check_in_air,
         first=timedelta(seconds=1),
@@ -218,17 +216,22 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     # add the registration or anything.
     # TODO, should I be updating the dict if a registration doesn't
     # exist when in in_the_air ?
+    text = None
     if fl_id in flight_dict.key_map.keys():
         fLog.info(f"Adding updated flight_data to id: {fl_id}")
         flight_dict[fl_id] = new_flight
+        text = f"Flight checker has updated ID: {assigned_id} in the list!"
     else:
         i_text = ""
         key_list = []
+        assigned_id = fl_id
         if new_flight.hex_id:
             # We should always have the hex_id to rely on, registration is never guaranteed
-            i_text += f"Assigning hex_id {new_flight.hex_id}\n"
+            i_text += f"Assigning hex_id {new_flight.hex_id} -- "
             key_list.append(new_flight.hex_id)
-            print(f"Added {new_flight.hex_id} to flight_dict")
+            log.info(f"Added {new_flight.hex_id} to flight_dict")
+            if assigned_id is not new_flight.hex_id: 
+                assigned_id = new_flight.hex_id
         if new_flight.registration:
             i_text += f"Assigning registration {new_flight.registration}"
             # Add a new mapping if there is no registration, otherwise just add to the key
@@ -236,11 +239,11 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         flight_dict.add_mapping(new_flight, *key_list)
         fLog.info(i_text)
-        text = f"Flight checker has added ID: {fl_id} to the list!"
+        text = f"Flight checker has added ID: {assigned_id} to the list!"
         try:
-            active_flight_list[fl_id] = [is_reg, repeat]
+            active_flight_list[assigned_id] = [is_reg, repeat]
         except(KeyError, IndexError, ValueError):
-            text = f"Failed to add {fl_id} to active flight list"
+            text = f"Failed to add {assigned_id} to active flight list"
             fLog.warning(text)
     await context.bot.send_message(TEST_GROUP_ID, text)
 

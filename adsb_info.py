@@ -6,7 +6,7 @@ Responsible for retreiving, storing, and processing data from ADSB API
 
 from datetime import datetime, timedelta
 import json
-import logging
+import logging as log
 import os
 import requests
 
@@ -24,10 +24,17 @@ headers = {
     "X-RapidAPI-Host": "adsbexchange-com1.p.rapidapi.com",
 }
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+adLog = log.getLogger("adsb_info")
+
+# Enable logging 
+adLog.setLevel(log.INFO)
+formatter = log.Formatter('%(asctime)s - %(name)s - %(funcName)s:%(lineno)d - [%(levelname)s] - %(message)s')
+handler = log.StreamHandler()
+handler.setFormatter(formatter)
+adLog.propagate = False
+
+# Add the console handler to the logger
+adLog.addHandler(handler)
 
 class FlightData:
     """Handles ADBS Data"""
@@ -58,16 +65,14 @@ class FlightData:
         response = ""
         if self.registration:
             reg = self.registration
-            print("Checking flight info for registration ID: ", reg)
+            adLog.info(f"Checking flight info for registration ID: {reg}")
             local_url_reg = URL_REG + reg + "/"
-            print(local_url_reg)
             response = requests.get(
                 local_url_reg, headers=headers, timeout=10
             )
         else:
-            print("Checking flight info for hex ID: ", self.hex_id)
+            adLog.info(f"Checking flight info for hex ID: {self.hex_id}")
             local_url_hex = URL_HEX + self.hex_id + "/"
-            print(local_url_hex)
             response = requests.get(
                 local_url_hex, headers=headers, timeout=10
             )
@@ -81,17 +86,18 @@ class FlightData:
         flight_id = (
             str(flight_data["flight"]).strip() if "flight" in flight_data else ""
         )
+        # Blocked flights will likely not have a registration
         reg = flight_data["r"] if "r" in flight_data else ""
         # Populate the member variables, print if the json data failed to get the info
         if hex_id == "":
-            print("Couldn't find hex")
+            adLog.warn("Couldn't find hex id")
             processed_all = False
         # Typically if a flight is scrambled/hidden, this is the field that'll be omitted
         if reg == "":
-            print("Couldn't find reg")
+            adLog.warn("Couldn't find registration")
             processed_all = False
         if flight_id == "":
-            print("Couldn't find flight_id")
+            adLog.warn("Couldn't find flight id")
             processed_all = False
         self.hex_id = hex_id
         self.registration = reg
@@ -105,34 +111,38 @@ class FlightData:
         """
         # Only check during awake time
         if datetime.now().hour not in awakeTime:
-            print("Go to bed")
+            log.debug("Outside of monitoring hours")
             return False
         j_resp = self.get_raw_adsb_data()
         # Try hex_id first
         plane_id = self.registration if self.registration != "" else self.hex_id
         # The message field only pops up when there's an error
         if "message" in j_resp:
-            print("There's an issue with ID " + plane_id + " ..." + j_resp["message"])
+            adLog.info(f"There's an issue with ID {plane_id}: \n {j_resp["message"]}")
             return False
-        if j_resp["msg"] == "No error" and j_resp["ac"]:
-            altitude = j_resp["ac"][0]["alt_baro"]
-            if (altitude == "ground") or (altitude < 20):
-                print(
-                    "Plane information is populating but the flight is at altitude:",
-                     altitude
-                )
-                return False
-            # If the flight is in the air then we should definit
-            if self.registration == "":
-                try:
-                    self.registration = j_resp["ac"][0]['r']
-                except(KeyError):
-                    print("No registration included...")
-            print("Flight ", plane_id, "is in the air")
-            return True
-        print(
-            "Nothing reported from ", plane_id, ", last check at ",
-            datetime.fromtimestamp(datetime.now().timestamp()),
+        try:
+            if j_resp["msg"] == "No error" and j_resp["ac"]:
+                altitude = j_resp["ac"][0]["alt_baro"]
+                if (altitude == "ground") or (altitude < 20):
+                    adLog.warn(
+                        f"Plane information is populating but the flight is at altitude: \
+                        {altitude}"
+                    )
+                    return False
+                # If the flight is in the air then we should definit
+                if self.registration == "":
+                    try:
+                        self.registration = j_resp["ac"][0]['r']
+                    except(KeyError):
+                        adLog.error("No registration included...")
+                adLog.info(f"Flight {plane_id} is in the air")
+                return True
+        except(KeyError):
+            # Dump it all if this happens
+            adLog.error(f"There was an error with the logs: \n {j_resp}")
+        adLog.info(
+            f"Nothing reported from {plane_id}, last check at {
+            datetime.fromtimestamp(datetime.now().timestamp())}"
         )
         return False
 
@@ -143,7 +153,7 @@ class FlightData:
         )
         # Probably better to just go off registration for getting AeroData
         if self.raw_aero_data == "":
-            print("No JSON found")
+            adLog.warn("No JSON found")
             return False
         return True
 
@@ -166,8 +176,7 @@ class FlightData:
             )
             return True
         except (IndexError, ValueError):
-            print("Couldn't process data for ID ", self.hex_id)
-            print(self.raw_aero_data)
+            adLog.error(f"Couldn't process data for ID {self.hex_id}")
             return False
 
     def is_plane_on_ground(self) -> bool:
@@ -175,20 +184,20 @@ class FlightData:
         j_resp = self.get_raw_adsb_data()
         plane_id = self.registration
         if "message" in j_resp:
-            print("There's an issue with ID " + plane_id + " ... " + j_resp["message"])
+            adLog.error(f"There's an issue with ID {plane_id} ... {j_resp["message"]}")
             return False
         if j_resp["msg"] == "No error":
             if j_resp["ac"]:
                 # alt_baro will read "Ground" if it's on the ground, will publish altitute otherwise
                 altitude = j_resp["ac"][0]["alt_baro"]
                 if (altitude == "ground") or (altitude < 20):
-                    print("Plane ", self.registration, " has landed, altitude: ", altitude)
+                    adLog.info(f"Plane {self.registration} has landed, altitude: {altitude}")
                     return True
             # At this point in the logic, we assume that we've gotten usable information in the past 
             # TODO, Find a better way to check this.
             elif j_resp["ac"] == None or j_resp["ac"] == "":
                 # Flight has most likely landed and we just missed it landing
-                print("Plane ", self.registration, " has stopped publishing information to ADSB")
+                adLog.warn(f"Plane {self.registration} has stopped publishing information to ADSB")
                 return True
         return False
 
