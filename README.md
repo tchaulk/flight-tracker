@@ -12,11 +12,11 @@ Additional plane data will be included for publicly available flights, private f
 ## Start
 1. Clone the repository:
 
-'git clone https://github.com/tchaulk/flight-tracker'
+`git clone https://github.com/tchaulk/flight-tracker`
 
-'cd flight-tracker'
+`cd flight-tracker`
 
-'./flight_bot.py'
+`./flight_bot.py`
 
 ## Usage
 
