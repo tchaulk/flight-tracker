@@ -188,7 +188,20 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
         fl_id = context.job.data[0]
         # (TODO) Add flight number as an argument, ideally this could be in the form of
         # a second prompt asking what we just provided
-        is_reg = context.job.data[1] == "reg"
+        id_type = context.job.data[1]
+        is_reg = False
+        # Make sure to reject incorrect spelling if it's not exactly "reg" or "hex"
+        match id_type.casefold():
+            case "reg":
+                is_reg = True
+            case "hex":
+                is_reg = False
+            case _:
+                fLog.error(f"{id_type}??")
+                await context.bot.send_message(
+                    TEST_GROUP_ID, "Usage: /add <id> <idType(reg, hex)> <recurring>"
+                )
+                return
         # Make sure to convert to lower if this is a hex id
         fl_id = fl_id if is_reg else fl_id.lower()
         repeat = context.job.data[2] if len(context.job.data) > 2 else False
@@ -220,7 +233,7 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     if fl_id in flight_dict.key_map.keys():
         fLog.info(f"Adding updated flight_data to id: {fl_id}")
         flight_dict[fl_id] = new_flight
-        text = f"Flight checker has updated ID: {assigned_id} in the list!"
+        text = f"Flight checker has updated ID: {fl_id} in the list!"
     else:
         i_text = ""
         key_list = []
@@ -251,14 +264,14 @@ async def add_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def add_flight_job_callback(context: ContextTypes.DEFAULT_TYPE):
     """Handles when attempting to call add_flight as a job"""
     # Extracting data passed to the job
-    flight, hex_value, recurring = context.job.data
+    flight_id, id_type, is_recurring = context.job.data
 
     # Call the shared callback function
     context.job_queue.run_once(
         add_flight_callback,
         when=timedelta(seconds=1),
         name=str(TEST_GROUP_ID),
-        data=[flight, hex_value, recurring],
+        data=[flight_id, id_type, is_recurring],
     )
 
 
@@ -276,15 +289,17 @@ async def add_flight_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    flight = args[0]
-    hex_value = args[1]
-    recurring = args[2] if len(args) > 2 else False
+    flight_id = args[0]
+    id_type = args[1]
+    is_recurring = args[2] if len(args) > 2 and args[2] == "recurring" else False
+    if len(args) > 2 and args[2] != "recurring":
+        fLog.warn("Spelling is incorrect, this will be considered recurring")
     # Call the shared callback function
     context.job_queue.run_once(
         add_flight_callback,
         when=timedelta(seconds=1),
         name=str(TEST_GROUP_ID),
-        data=[flight, hex_value, recurring],
+        data=[flight_id, id_type, is_recurring],
     )
 
 
@@ -329,7 +344,8 @@ async def remove_flight_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     r_id = context.job.data
     if r_id is None:
         text = "Usage: /remove <id>"
-    elif r_id in active_flight_list.keys():
+    # Make the check non case sensitive
+    elif r_id.casefold() in active_flight_list.keys():
         text = f"Removing ID: [{r_id}] from list"
         try:
             del active_flight_list[r_id]
